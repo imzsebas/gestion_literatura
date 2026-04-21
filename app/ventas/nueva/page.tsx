@@ -1,5 +1,5 @@
 "use client"
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
@@ -28,7 +28,7 @@ interface Member {
 type FormaPago = 'contado' | 'credito' | 'credi_contado' | 'ofrendado'
 type MetodoPago = 'efectivo' | 'transferencia'
 
-export default function NuevaVentaPage() {
+function NuevaVentaContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const miembroParam = searchParams.get('miembro')
@@ -67,7 +67,6 @@ export default function NuevaVentaPage() {
   }, [miembroParam])
 
   const fetchInventario = async () => {
-    // Paso 1: traer lotes activos con stock
     const { data: lots } = await supabase
       .from('inventory_lots')
       .select('id, book_id, sale_price_unit, available_quantity, real_cost_unit')
@@ -77,7 +76,6 @@ export default function NuevaVentaPage() {
 
     if (!lots || lots.length === 0) return
 
-    // Paso 2: traer books por separado
     const bookIds = [...new Set(lots.map(l => l.book_id).filter(Boolean))]
     const { data: books } = await supabase
       .from('books')
@@ -126,19 +124,13 @@ export default function NuevaVentaPage() {
     if (!busquedaMiembro.trim()) return
     setBuscando(true)
     setNoEncontrado(false)
-
     const { data } = await supabase
       .from('members')
       .select('id, name, cedula, phone')
       .or(`name.ilike.%${busquedaMiembro}%,cedula.eq.${busquedaMiembro},phone.eq.${busquedaMiembro}`)
       .limit(1)
       .maybeSingle()
-
-    if (data) {
-      setMiembro(data)
-    } else {
-      setNoEncontrado(true)
-    }
+    if (data) { setMiembro(data) } else { setNoEncontrado(true) }
     setBuscando(false)
   }
 
@@ -146,7 +138,7 @@ export default function NuevaVentaPage() {
     if (!nuevoNombre || !nuevaCedula) return
     setSavingMiembro(true)
     const user = JSON.parse(sessionStorage.getItem('user') || '{}')
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('members')
       .insert({ name: nuevoNombre, cedula: nuevaCedula, phone: nuevoTel || null, created_by: user.id ?? null })
       .select()
@@ -159,9 +151,7 @@ export default function NuevaVentaPage() {
     if (!miembro || !formaPago) return
     setSaving(true)
     const user = JSON.parse(sessionStorage.getItem('user') || '{}')
-
     try {
-      // 1. Crear venta
       const { data: sale, error: saleError } = await supabase
         .from('sales')
         .insert({
@@ -178,7 +168,6 @@ export default function NuevaVentaPage() {
 
       if (saleError || !sale) throw new Error('Error al crear la venta')
 
-      // 2. Items de venta + reducir stock
       for (const item of cart) {
         await supabase.from('sale_items').insert({
           sale_id: sale.id,
@@ -188,56 +177,36 @@ export default function NuevaVentaPage() {
           sale_price_snapshot: item.precioVenta,
           real_cost_snapshot: item.costoReal,
         })
-
         const nuevaCantidad = item.cantidadDisponible - item.cantidad
-        await supabase
-          .from('inventory_lots')
-          .update({
-            available_quantity: nuevaCantidad,
-            ...(nuevaCantidad <= 0 ? { status: 'sold_out' } : {}),
-          })
-          .eq('id', item.id)
+        await supabase.from('inventory_lots').update({
+          available_quantity: nuevaCantidad,
+          ...(nuevaCantidad <= 0 ? { status: 'sold_out' } : {}),
+        }).eq('id', item.id)
       }
 
-      // 3. Movimiento de caja si hay pago inmediato
-      const montoIngreso = formaPago === 'contado' ? totalVenta
-        : formaPago === 'credi_contado' ? abono : 0
-
+      const montoIngreso = formaPago === 'contado' ? totalVenta : formaPago === 'credi_contado' ? abono : 0
       if (montoIngreso > 0) {
         await supabase.from('cash_movements').insert({
-          type: 'income',
-          concept: 'sale',
-          amount: montoIngreso,
+          type: 'income', concept: 'sale', amount: montoIngreso,
           payment_method: metodoPago,
           receipt_number: metodoPago === 'transferencia' ? comprobante : null,
-          sale_id: sale.id,
-          created_by: user.id ?? null,
+          sale_id: sale.id, created_by: user.id ?? null,
         })
       }
 
-      // 4. Deuda si aplica
-      const montoDeuda = formaPago === 'credito' ? totalVenta
-        : formaPago === 'credi_contado' ? deudaRestante : 0
-
+      const montoDeuda = formaPago === 'credito' ? totalVenta : formaPago === 'credi_contado' ? deudaRestante : 0
       if (montoDeuda > 0) {
         await supabase.from('debts').insert({
-          sale_id: sale.id,
-          member_id: miembro.id,
-          original_amount: montoDeuda,
-          pending_amount: montoDeuda,
-          status: 'pending',
+          sale_id: sale.id, member_id: miembro.id,
+          original_amount: montoDeuda, pending_amount: montoDeuda, status: 'pending',
         })
       }
 
-      // 5. Ofrendado: salida de utilidades al costo real
       if (formaPago === 'ofrendado') {
         const costoTotal = cart.reduce((s, i) => s + i.costoReal * i.cantidad, 0)
         await supabase.from('cash_movements').insert({
-          type: 'expense',
-          concept: 'gifted',
-          amount: costoTotal,
-          sale_id: sale.id,
-          created_by: user.id ?? null,
+          type: 'expense', concept: 'gifted', amount: costoTotal,
+          sale_id: sale.id, created_by: user.id ?? null,
         })
       }
 
@@ -319,14 +288,12 @@ export default function NuevaVentaPage() {
           <div className="search-wrap">
             <input className="search-input" placeholder="Buscar por título o autor..." value={busquedaLibro} onChange={e => setBusquedaLibro(e.target.value)} />
           </div>
-
           {inventario.length === 0 && (
             <div style={{ textAlign: 'center', padding: '40px 20px', color: '#A0AEC0' }}>
               <p style={{ fontSize: 32, marginBottom: 8 }}>📦</p>
               <p>No hay libros disponibles en inventario</p>
             </div>
           )}
-
           {filteredInventario.map(lote => {
             const itemCarrito = enCarrito(lote.id)
             return (
@@ -353,14 +320,12 @@ export default function NuevaVentaPage() {
               </div>
             )
           })}
-
           {cart.length > 0 && (
             <div className="total-bar" style={{ margin: '10px 20px 90px' }}>
               <span style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13 }}>{cart.reduce((s, i) => s + i.cantidad, 0)} libro(s)</span>
               <span style={{ color: 'white', fontSize: 20, fontWeight: 700 }}>${totalVenta.toLocaleString('es-CO')}</span>
             </div>
           )}
-
           <button className="cta-btn" disabled={cart.length === 0} onClick={() => setStep(2)}>
             Continuar — Identificar Comprador →
           </button>
@@ -371,7 +336,6 @@ export default function NuevaVentaPage() {
       {step === 2 && (
         <>
           <p className="section-title">Buscar comprador</p>
-
           {!miembro && !showFormMiembro && (
             <div className="card">
               <p className="label">Cédula, nombre o teléfono</p>
@@ -388,19 +352,16 @@ export default function NuevaVentaPage() {
                   {buscando ? '...' : 'Buscar'}
                 </button>
               </div>
-
               {noEncontrado && (
                 <div style={{ marginTop: 12, padding: '10px 12px', background: '#FFF8E1', borderRadius: 10 }}>
                   <p style={{ fontSize: 13, color: '#856404' }}>No se encontró ningún miembro con ese dato.</p>
                 </div>
               )}
-
               <button onClick={() => setShowFormMiembro(true)} style={{ marginTop: 14, width: '100%', background: 'none', border: '1.5px dashed #CBD5E0', borderRadius: 12, padding: 12, color: '#718096', cursor: 'pointer', fontFamily: 'DM Sans, sans-serif', fontSize: 14 }}>
                 + Registrar nuevo miembro
               </button>
             </div>
           )}
-
           {showFormMiembro && (
             <div className="card">
               <p style={{ fontWeight: 700, color: '#1A202C', marginBottom: 14 }}>Nuevo Miembro</p>
@@ -418,7 +379,6 @@ export default function NuevaVentaPage() {
               </div>
             </div>
           )}
-
           {miembro && (
             <>
               <div className="member-found">
@@ -445,14 +405,13 @@ export default function NuevaVentaPage() {
             </div>
             <span style={{ color: 'white', fontSize: 22, fontWeight: 700 }}>${totalVenta.toLocaleString('es-CO')}</span>
           </div>
-
           <p className="section-title">¿Cómo paga?</p>
           <div className="pago-grid">
             {([
-              { key: 'contado',      icon: '💵', name: 'Contado',      desc: 'Pago total inmediato' },
-              { key: 'credito',      icon: '📋', name: 'Crédito',      desc: 'Queda como deuda' },
-              { key: 'credi_contado',icon: '🤝', name: 'Credi-Contado',desc: 'Abono + deuda restante' },
-              { key: 'ofrendado',    icon: '🎁', name: 'Ofrendado',    desc: 'Regalo del negocio' },
+              { key: 'contado',       icon: '💵', name: 'Contado',       desc: 'Pago total inmediato' },
+              { key: 'credito',       icon: '📋', name: 'Crédito',       desc: 'Queda como deuda' },
+              { key: 'credi_contado', icon: '🤝', name: 'Credi-Contado', desc: 'Abono + deuda restante' },
+              { key: 'ofrendado',     icon: '🎁', name: 'Ofrendado',     desc: 'Regalo del negocio' },
             ] as const).map(op => (
               <button key={op.key} className={`pago-btn ${formaPago === op.key ? 'selected' : ''}`} onClick={() => setFormaPago(op.key)}>
                 <div style={{ fontSize: 26, marginBottom: 6 }}>{op.icon}</div>
@@ -461,7 +420,6 @@ export default function NuevaVentaPage() {
               </button>
             ))}
           </div>
-
           {formaPago === 'credi_contado' && (
             <div className="card">
               <p className="label">Monto del abono inicial</p>
@@ -474,7 +432,6 @@ export default function NuevaVentaPage() {
               )}
             </div>
           )}
-
           {(formaPago === 'contado' || formaPago === 'credi_contado') && (
             <>
               <p className="section-title">Método de pago</p>
@@ -490,26 +447,31 @@ export default function NuevaVentaPage() {
               )}
             </>
           )}
-
           {formaPago === 'credito' && (
             <div className="alert-box" style={{ background: '#FFF8E1', border: '1px solid #F6C90E' }}>
               <p style={{ fontSize: 14, color: '#856404', fontWeight: 600 }}>⚠️ Venta a crédito</p>
               <p style={{ fontSize: 13, color: '#856404', marginTop: 6 }}>Se creará una deuda de <strong>${totalVenta.toLocaleString('es-CO')}</strong> a nombre de {miembro?.name}.</p>
             </div>
           )}
-
           {formaPago === 'ofrendado' && (
             <div className="alert-box" style={{ background: '#F0FFF4', border: '1px solid #68D391' }}>
               <p style={{ fontSize: 14, color: '#276749', fontWeight: 600 }}>🎁 Libro ofrendado</p>
               <p style={{ fontSize: 13, color: '#276749', marginTop: 6 }}>El costo real se descontará de las utilidades. El comprador no paga nada.</p>
             </div>
           )}
-
           <button className="cta-btn green" disabled={!puedeConfirmar() || saving} onClick={confirmarVenta}>
             {saving ? 'Registrando...' : `✓ Confirmar Venta — $${totalVenta.toLocaleString('es-CO')}`}
           </button>
         </>
       )}
     </main>
+  )
+}
+
+export default function NuevaVentaPage() {
+  return (
+    <Suspense fallback={null}>
+      <NuevaVentaContent />
+    </Suspense>
   )
 }
