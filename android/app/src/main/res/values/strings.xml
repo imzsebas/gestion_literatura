@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MiSistema</string>
+    <string name="title_activity_main">MiSistema</string>
+    <string name="package_name">com.sebas.misistema</string>
+    <string name="custom_url_scheme">com.sebas.misistema</string>
+</resources>
