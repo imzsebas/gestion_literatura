@@ -33,7 +33,8 @@ export default function DeudoresPage() {
   const [deudaSeleccionada, setDeudaSeleccionada] = useState<Deuda | null>(null)
   const [montoAbono, setMontoAbono] = useState<number>(0)
   const [metodoPago, setMetodoPago] = useState<'efectivo' | 'transferencia'>('efectivo')
-  const [comprobante, setComprobante] = useState('')
+  const [comprobanteFile, setComprobanteFile] = useState<File | null>(null)
+  const [comprobantePreview, setComprobantePreview] = useState<string | null>(null)
   const [savingAbono, setSavingAbono] = useState(false)
   const [errorAbono, setErrorAbono] = useState('')
 
@@ -117,9 +118,9 @@ export default function DeudoresPage() {
     const saldo = deuda.pendingAmount.toLocaleString('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 })
 
     const mensaje =
-      `Hola ${primerNombre}, esperamos que estés muy bien. 🙏\n\n` +
-      `Te contactamos amablemente del *Servicio de Literatura* para recordarte que tienes un saldo pendiente de *${saldo}* correspondiente a: *${libros}*, generado el ${fecha}.\n\n` +
-      `Te agradecemos comunicarte con nuestro equipo de contabilidad para coordinar el pago de tu saldo. ¡Que Dios te bendiga! ✨`
+      `Hola ${primerNombre}, esperamos que estés muy bien. 😊\n\n` +
+      `Te hablamos del *Servicio de Literatura* de la iglesia en montería 📚, para recordarte que tienes un saldo pendiente de *${saldo}* correspondiente a: *${libros}*, generado el ${fecha}.\n\n` +
+      `Te agradecemos comunicarte con nosotros para coordinar el pago de tu saldo. ¡Que Dios te bendiga! ✨`
 
     const url = `https://wa.me/57${deudor.phone}?text=${encodeURIComponent(mensaje)}`
     window.open(url, '_blank')
@@ -135,6 +136,20 @@ export default function DeudoresPage() {
     setSavingAbono(true)
     const user = JSON.parse(sessionStorage.getItem('user') || '{}')
 
+    // Subir foto del comprobante si existe
+    let receiptUrl: string | null = null
+    if (comprobanteFile && metodoPago === 'transferencia') {
+      const ext = comprobanteFile.name.split('.').pop() ?? 'jpg'
+      const fileName = `comprobantes/${Date.now()}.${ext}`
+      const { error: uploadError } = await supabase.storage
+        .from('receipts')
+        .upload(fileName, comprobanteFile, { contentType: comprobanteFile.type })
+      if (!uploadError) {
+        const { data: urlData } = supabase.storage.from('receipts').getPublicUrl(fileName)
+        receiptUrl = urlData.publicUrl
+      }
+    }
+
     const nuevoSaldo = deudaSeleccionada.pendingAmount - montoAbono
     const nuevoStatus = nuevoSaldo <= 0 ? 'paid' : 'partial'
 
@@ -149,7 +164,7 @@ export default function DeudoresPage() {
       debt_id: deudaSeleccionada.id,
       amount: montoAbono,
       payment_method: metodoPago,
-      receipt_number: metodoPago === 'transferencia' ? comprobante : null,
+      receipt_image_url: receiptUrl,
       created_by: user.id ?? null,
     })
 
@@ -159,14 +174,15 @@ export default function DeudoresPage() {
       concept: 'advance',
       amount: montoAbono,
       payment_method: metodoPago,
-      receipt_number: metodoPago === 'transferencia' ? comprobante : null,
+      receipt_image_url: receiptUrl,
       sale_id: deudaSeleccionada.saleId,
       created_by: user.id ?? null,
     })
 
     setDeudaSeleccionada(null)
     setMontoAbono(0)
-    setComprobante('')
+    setComprobanteFile(null)
+    setComprobantePreview(null)
     setMetodoPago('efectivo')
     setSelected(null)
     setSavingAbono(false)
@@ -396,8 +412,37 @@ export default function DeudoresPage() {
 
             {metodoPago === 'transferencia' && (
               <>
-                <p className="label">N° de comprobante</p>
-                <input className="input" placeholder="Número de referencia" value={comprobante} onChange={e => setComprobante(e.target.value)} style={{ marginBottom: 12 }} />
+                <p className="label" style={{ marginTop: 12 }}>Foto del comprobante <span style={{ color: '#A0AEC0' }}>(opcional)</span></p>
+                {!comprobantePreview ? (
+                  <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+                    <label style={{ flex: 1, background: '#EEF2FA', border: '1.5px dashed #CBD5E0', borderRadius: 12, padding: '14px 10px', textAlign: 'center', cursor: 'pointer', fontSize: 13, color: '#718096', fontWeight: 600 }}>
+                      📁 Galería
+                      <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => {
+                        const f = e.target.files?.[0]
+                        if (!f) return
+                        setComprobanteFile(f)
+                        setComprobantePreview(URL.createObjectURL(f))
+                      }} />
+                    </label>
+                    <label style={{ flex: 1, background: '#EEF2FA', border: '1.5px dashed #CBD5E0', borderRadius: 12, padding: '14px 10px', textAlign: 'center', cursor: 'pointer', fontSize: 13, color: '#718096', fontWeight: 600 }}>
+                      📷 Cámara
+                      <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => {
+                        const f = e.target.files?.[0]
+                        if (!f) return
+                        setComprobanteFile(f)
+                        setComprobantePreview(URL.createObjectURL(f))
+                      }} />
+                    </label>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 8, position: 'relative' }}>
+                    <img src={comprobantePreview} alt="Comprobante" style={{ width: '100%', borderRadius: 12, maxHeight: 200, objectFit: 'cover' }} />
+                    <button onClick={() => { setComprobanteFile(null); setComprobantePreview(null) }}
+                      style={{ position: 'absolute', top: 8, right: 8, background: 'rgba(0,0,0,0.55)', border: 'none', color: 'white', borderRadius: '50%', width: 28, height: 28, cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      ✕
+                    </button>
+                  </div>
+                )}
               </>
             )}
 

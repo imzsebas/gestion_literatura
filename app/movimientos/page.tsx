@@ -24,7 +24,16 @@ export default function MovimientosPage() {
   const [filtro, setFiltro] = useState<'todos' | TipoMovimiento>('todos')
 
   const fmt = (v: number) => v.toLocaleString('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 })
-  const fmtFecha = (f: string) => new Date(f).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+  const fmtFecha = (f: string) => {
+    if (!f) return '—'
+    // arrival_date viene como YYYY-MM-DD (solo fecha, sin hora)
+    if (f.length === 10) {
+      const [anio, mes, dia] = f.split('-')
+      return `${dia}/${mes}/${anio}`
+    }
+    // created_at viene como timestamp completo (con hora)
+    return new Date(f).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+  }
 
   useEffect(() => { fetchMovimientos() }, [])
 
@@ -41,7 +50,7 @@ export default function MovimientosPage() {
     // Traer datos de ventas relacionadas
     const saleIds = [...new Set((cashMov ?? []).map(m => m.sale_id).filter(Boolean))]
     const { data: salesData } = saleIds.length > 0
-      ? await supabase.from('sales').select('id, payment_type, payment_method, total, advance_payment, member_id, created_by').in('id', saleIds)
+      ? await supabase.from('sales').select('id, payment_type, payment_method, total, advance_payment, member_id, created_by, receipt_image_url').in('id', saleIds)
       : { data: [] }
 
     // Traer miembros
@@ -74,6 +83,18 @@ export default function MovimientosPage() {
       ? await supabase.from('debts').select('id, sale_id, original_amount, pending_amount, status').in('sale_id', saleIds)
       : { data: [] }
 
+    // Traer pagos de deuda (abonos) para obtener receipt_image_url
+    const debtIds = (debtsData ?? []).map(d => d.id)
+    const { data: debtPaymentsData } = debtIds.length > 0
+      ? await supabase.from('debt_payments').select('id, debt_id, amount, payment_method, receipt_image_url, created_at').in('debt_id', debtIds).order('created_at', { ascending: false })
+      : { data: [] }
+
+    // Mapa: debt_id → último pago (el más reciente)
+    const lastPaymentByDebt: Record<string, any> = {}
+    for (const dp of debtPaymentsData ?? []) {
+      if (!lastPaymentByDebt[dp.debt_id]) lastPaymentByDebt[dp.debt_id] = dp
+    }
+
     // Mapas para lookup rápido
     const salesMap = Object.fromEntries((salesData ?? []).map(s => [s.id, s]))
     const membersMap = Object.fromEntries((membersData ?? []).map(m => [m.id, m]))
@@ -93,6 +114,7 @@ export default function MovimientosPage() {
       const vendedor = usersMap[m.created_by ?? sale?.created_by] ?? null
       const libros = m.sale_id ? (itemsBySale[m.sale_id] ?? []) : []
       const deuda = m.sale_id ? debtsBySale[m.sale_id] : null
+      const debtPayment = deuda ? lastPaymentByDebt[deuda.id] : null
 
       const tipo: TipoMovimiento = m.concept === 'gifted' ? 'ofrendado'
         : m.concept === 'advance' ? 'abono'
@@ -110,7 +132,7 @@ export default function MovimientosPage() {
         monto: m.type === 'income' ? Number(m.amount) : -Number(m.amount),
         fecha: m.created_at,
         icono: tipo === 'venta' ? '🛒' : tipo === 'abono' ? '💰' : '🎁',
-        detalle: { sale, member, vendedor, libros, deuda, cashMov: m },
+        detalle: { sale, member, vendedor, libros, deuda, cashMov: m, debtPayment },
       })
     }
 
@@ -143,7 +165,7 @@ export default function MovimientosPage() {
           tipo: 'pedido_libros',
           descripcion: `Pedido libros — ${p.provider}`,
           monto: -costoLibros,
-          fecha: p.created_at,
+          fecha: p.arrival_date || p.created_at,
           icono: '📦',
           detalle: { pedido: p, lotes, registrador, totalUnidades, costoLibros },
         })
@@ -155,7 +177,7 @@ export default function MovimientosPage() {
           tipo: 'pedido_envio',
           descripcion: `Envío pedido — ${p.provider}`,
           monto: -Number(p.shipping_cost),
-          fecha: p.created_at,
+          fecha: p.arrival_date || p.created_at,
           icono: '🚚',
           detalle: { pedido: p, lotes, registrador, totalUnidades, costoLibros },
         })
@@ -370,7 +392,18 @@ export default function MovimientosPage() {
                   </div>
                 </div>
 
-                {/* Comprador */}
+                {selected.detalle.sale?.receipt_image_url && (
+                  <div className="detail-section">
+                    <p className="detail-title">Comprobante de pago</p>
+                    <a href={selected.detalle.sale.receipt_image_url} target="_blank" rel="noopener noreferrer">
+                      <img
+                        src={selected.detalle.sale.receipt_image_url}
+                        alt="Comprobante"
+                        style={{ width: '100%', borderRadius: 14, maxHeight: 300, objectFit: 'cover', display: 'block' }}
+                      />
+                    </a>
+                  </div>
+                )}
                 {selected.detalle.member && (
                   <div className="detail-section">
                     <p className="detail-title">Comprador</p>
@@ -505,6 +538,18 @@ export default function MovimientosPage() {
                     </div>
                   </div>
                 )}
+                {selected.detalle.debtPayment?.receipt_image_url && (
+                  <div className="detail-section">
+                    <p className="detail-title">Comprobante de pago</p>
+                    <a href={selected.detalle.debtPayment.receipt_image_url} target="_blank" rel="noopener noreferrer">
+                      <img
+                        src={selected.detalle.debtPayment.receipt_image_url}
+                        alt="Comprobante"
+                        style={{ width: '100%', borderRadius: 14, maxHeight: 300, objectFit: 'cover', display: 'block' }}
+                      />
+                    </a>
+                  </div>
+                )}
                 {selected.detalle.libros?.length > 0 && (
                   <div className="detail-section">
                     <p className="detail-title">Libro(s) de la deuda</p>
@@ -540,7 +585,7 @@ export default function MovimientosPage() {
                       <span className="detail-label">Fecha de llegada</span>
                       <span className="detail-value">
                         {selected.detalle.pedido.arrival_date
-                          ? new Date(selected.detalle.pedido.arrival_date).toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' })
+                          ? (() => { const [a,m,d] = selected.detalle.pedido.arrival_date.split('-'); return `${d}/${m}/${a}` })()
                           : '—'}
                       </span>
                     </div>

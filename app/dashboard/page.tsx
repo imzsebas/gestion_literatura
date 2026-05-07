@@ -10,6 +10,7 @@ interface ActivityItem {
   monto: number
   fecha: string
   icono: string
+  esSoloFecha: boolean  // true = arrival_date (DD/MM/AAAA), false = timestamp (con hora)
 }
 
 export default function DashboardPage() {
@@ -26,6 +27,22 @@ export default function DashboardPage() {
 
   const formatCurrency = (value: number) =>
     value.toLocaleString('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 })
+
+  // Formatea la fecha según su tipo:
+  // - arrival_date (YYYY-MM-DD) → DD/MM/AAAA
+  // - created_at (timestamp)    → "17 may, 07:00 p. m."
+  const formatFecha = (fecha: string, esSoloFecha: boolean): string => {
+    if (esSoloFecha) {
+      const [anio, mes, dia] = fecha.split('-')
+      return `${dia}/${mes}/${anio}`
+    }
+    return new Date(fecha).toLocaleDateString('es-CO', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  }
 
   useEffect(() => {
     const session = sessionStorage.getItem('user')
@@ -67,15 +84,6 @@ export default function DashboardPage() {
   }
 
   // ── 3. UTILIDAD ──
-  // Regla: la utilidad se genera SOLO cuando el dinero cobrado supera el costo real.
-  // Se calcula deuda por deuda (no acumulado por miembro).
-  //
-  // Fuente A — CONTADO: utilidad inmediata = precio_venta - costo_real por ítem
-  // Fuente B — CRÉDITO: por cada deuda → MAX(0, cobrado - costo)
-  // Fuente C — CREDI-CONTADO: cobrado_total = abono_inicial + abonos_posteriores
-  //            → por cada deuda → MAX(0, cobrado_total - costo)
-  //            El abono inicial (advance_payment) se suma al cobrado de la deuda
-  // Fuente D — OFRENDADO: pérdida = -costo_real × cantidad
   const calcularUtilidad = async () => {
     let utilidad = 0
 
@@ -91,8 +99,7 @@ export default function DashboardPage() {
       }
     }
 
-    // B y C) Crédito y Credi-contado — utilidad según cobrado vs costo, deuda por deuda
-    // Para credi-contado: cobrado = abono_inicial (advance_payment) + lo abonado después a la deuda
+    // B y C) Crédito y Credi-contado
     const { data: deudas } = await supabase
       .from('debts')
       .select('id, sale_id, original_amount, pending_amount')
@@ -100,7 +107,6 @@ export default function DashboardPage() {
     if (deudas && deudas.length > 0) {
       const saleIds = [...new Set(deudas.map(d => d.sale_id))]
 
-      // Costo real por venta
       const { data: itemsDeuda } = await supabase
         .from('sale_items')
         .select('sale_id, quantity, real_cost_snapshot')
@@ -111,7 +117,6 @@ export default function DashboardPage() {
         costoPorVenta[item.sale_id] = (costoPorVenta[item.sale_id] ?? 0) + (Number(item.real_cost_snapshot) * item.quantity)
       }
 
-      // Abono inicial de ventas credi-contado (advance_payment de la tabla sales)
       const { data: ventasCredi } = await supabase
         .from('sales')
         .select('id, advance_payment, payment_type')
@@ -123,7 +128,6 @@ export default function DashboardPage() {
         abonoInicialPorVenta[v.id] = Number(v.advance_payment ?? 0)
       }
 
-      // Por cada deuda calcular utilidad
       for (const deuda of deudas) {
         const abonadoALaDeuda = Number(deuda.original_amount) - Number(deuda.pending_amount)
         const abonoInicial = abonoInicialPorVenta[deuda.sale_id] ?? 0
@@ -164,24 +168,19 @@ export default function DashboardPage() {
   }
 
   // ── 6. ACTIVIDAD RECIENTE ──
-  // Incluye: movimientos de caja (ventas, abonos, ofrendados) + gastos de pedidos (costo libros + envío)
-  // Limitado a los 3 más recientes en total
   const fetchActividad = async () => {
-    // Movimientos de caja
     const { data: movimientos } = await supabase
       .from('cash_movements')
       .select('id, type, concept, amount, payment_method, created_at')
       .order('created_at', { ascending: false })
       .limit(10)
 
-    // Pedidos recientes (para mostrar gasto en libros y envío como registros separados)
     const { data: pedidos } = await supabase
-  .from('purchases')
-  .select('id, provider, shipping_cost, arrival_date, created_at')
-  .order('created_at', { ascending: false })
-  .limit(5)
+      .from('purchases')
+      .select('id, provider, shipping_cost, arrival_date, created_at')
+      .order('created_at', { ascending: false })
+      .limit(5)
 
-    // Costo total de libros por pedido
     const pedidoIds = (pedidos ?? []).map(p => p.id)
     const { data: lotes } = pedidoIds.length > 0
       ? await supabase
@@ -195,10 +194,9 @@ export default function DashboardPage() {
       costoPorPedido[l.purchase_id] = (costoPorPedido[l.purchase_id] ?? 0) + (l.initial_quantity * Number(l.net_price_unit))
     }
 
-    // Construir items de actividad
     const items: ActivityItem[] = []
 
-    // Movimientos de caja
+    // Movimientos de caja — usan created_at (timestamp con hora)
     for (const m of movimientos ?? []) {
       items.push({
         id: `cm-${m.id}`,
@@ -210,19 +208,25 @@ export default function DashboardPage() {
         monto: m.type === 'income' ? Number(m.amount) : -Number(m.amount),
         fecha: m.created_at,
         icono: m.concept === 'sale' ? '🛒' : m.concept === 'gifted' ? '🎁' : '💰',
+        esSoloFecha: false,  // created_at siempre tiene hora
       })
     }
 
-    // Pedidos — dos registros por pedido: costo de libros y envío (solo si envío > 0)
+    // Pedidos — usan arrival_date (solo fecha YYYY-MM-DD)
     for (const p of pedidos ?? []) {
       const costoLibros = costoPorPedido[p.id] ?? 0
+      // Determina si tiene arrival_date o cae en created_at
+      const tieneFechaLlegada = !!p.arrival_date
+      const fechaParaMostrar = p.arrival_date || p.created_at
+
       if (costoLibros > 0) {
         items.push({
           id: `ped-libros-${p.id}`,
           descripcion: `Pedido libros — ${p.provider}`,
           monto: -costoLibros,
-          fecha: p.arrival_date || p.created_at,
+          fecha: fechaParaMostrar,
           icono: '📦',
+          esSoloFecha: tieneFechaLlegada,
         })
       }
       if (Number(p.shipping_cost) > 0) {
@@ -230,8 +234,9 @@ export default function DashboardPage() {
           id: `ped-envio-${p.id}`,
           descripcion: `Envío pedido — ${p.provider}`,
           monto: -Number(p.shipping_cost),
-          fecha: p.arrival_date || p.created_at,
+          fecha: fechaParaMostrar,
           icono: '🚚',
+          esSoloFecha: tieneFechaLlegada,
         })
       }
     }
@@ -372,7 +377,7 @@ export default function DashboardPage() {
               <div>
                 <p style={{ fontSize: 14, fontWeight: 600, color: '#1A202C' }}>{item.descripcion}</p>
                 <p style={{ fontSize: 12, color: '#A0AEC0', marginTop: 2 }}>
-                  {new Date(item.fecha).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                  {formatFecha(item.fecha, item.esSoloFecha)}
                 </p>
               </div>
             </div>

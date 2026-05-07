@@ -51,7 +51,8 @@ function NuevaVentaContent() {
   const [formaPago, setFormaPago] = useState<FormaPago | null>(null)
   const [metodoPago, setMetodoPago] = useState<MetodoPago>('efectivo')
   const [abono, setAbono] = useState<number>(0)
-  const [comprobante, setComprobante] = useState('')
+  const [comprobanteFile, setComprobanteFile] = useState<File | null>(null)
+  const [comprobantePreview, setComprobantePreview] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
   const totalVenta = cart.reduce((s, i) => s + i.precioVenta * i.cantidad, 0)
@@ -152,6 +153,20 @@ function NuevaVentaContent() {
     setSaving(true)
     const user = JSON.parse(sessionStorage.getItem('user') || '{}')
     try {
+      // Subir foto del comprobante si existe
+      let receiptUrl: string | null = null
+      if (comprobanteFile && metodoPago === 'transferencia') {
+        const ext = comprobanteFile.name.split('.').pop() ?? 'jpg'
+        const fileName = `comprobantes/${Date.now()}.${ext}`
+        const { error: uploadError } = await supabase.storage
+          .from('receipts')
+          .upload(fileName, comprobanteFile, { contentType: comprobanteFile.type })
+        if (!uploadError) {
+          const { data: urlData } = supabase.storage.from('receipts').getPublicUrl(fileName)
+          receiptUrl = urlData.publicUrl
+        }
+      }
+
       const { data: sale, error: saleError } = await supabase
         .from('sales')
         .insert({
@@ -160,7 +175,7 @@ function NuevaVentaContent() {
           payment_method: (formaPago === 'contado' || formaPago === 'credi_contado') ? metodoPago : null,
           total: totalVenta,
           advance_payment: formaPago === 'credi_contado' ? abono : formaPago === 'contado' ? totalVenta : 0,
-          receipt_number: metodoPago === 'transferencia' ? comprobante : null,
+          receipt_image_url: receiptUrl,
           created_by: user.id ?? null,
         })
         .select()
@@ -189,7 +204,6 @@ function NuevaVentaContent() {
         await supabase.from('cash_movements').insert({
           type: 'income', concept: 'sale', amount: montoIngreso,
           payment_method: metodoPago,
-          receipt_number: metodoPago === 'transferencia' ? comprobante : null,
           sale_id: sale.id, created_by: user.id ?? null,
         })
       }
@@ -411,7 +425,7 @@ function NuevaVentaContent() {
               { key: 'contado',       icon: '💵', name: 'Contado',       desc: 'Pago total inmediato' },
               { key: 'credito',       icon: '📋', name: 'Crédito',       desc: 'Queda como deuda' },
               { key: 'credi_contado', icon: '🤝', name: 'Credi-Contado', desc: 'Abono + deuda restante' },
-              { key: 'ofrendado',     icon: '🎁', name: 'Ofrendado',     desc: 'Regalo del negocio' },
+              { key: 'ofrendado',     icon: '🎁', name: 'Ofrendado',     desc: 'Regalo del servicio' },
             ] as const).map(op => (
               <button key={op.key} className={`pago-btn ${formaPago === op.key ? 'selected' : ''}`} onClick={() => setFormaPago(op.key)}>
                 <div style={{ fontSize: 26, marginBottom: 6 }}>{op.icon}</div>
@@ -441,8 +455,37 @@ function NuevaVentaContent() {
               </div>
               {metodoPago === 'transferencia' && (
                 <div className="card">
-                  <p className="label">N° de comprobante</p>
-                  <input className="input" placeholder="Número de referencia" value={comprobante} onChange={e => setComprobante(e.target.value)} />
+                  <p className="label">Foto del comprobante <span style={{ color: '#A0AEC0' }}>(opcional)</span></p>
+                  {!comprobantePreview ? (
+                    <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+                      <label style={{ flex: 1, background: '#EEF2FA', border: '1.5px dashed #CBD5E0', borderRadius: 12, padding: '14px 10px', textAlign: 'center', cursor: 'pointer', fontSize: 13, color: '#718096', fontWeight: 600 }}>
+                        📁 Galería
+                        <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => {
+                          const f = e.target.files?.[0]
+                          if (!f) return
+                          setComprobanteFile(f)
+                          setComprobantePreview(URL.createObjectURL(f))
+                        }} />
+                      </label>
+                      <label style={{ flex: 1, background: '#EEF2FA', border: '1.5px dashed #CBD5E0', borderRadius: 12, padding: '14px 10px', textAlign: 'center', cursor: 'pointer', fontSize: 13, color: '#718096', fontWeight: 600 }}>
+                        📷 Cámara
+                        <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => {
+                          const f = e.target.files?.[0]
+                          if (!f) return
+                          setComprobanteFile(f)
+                          setComprobantePreview(URL.createObjectURL(f))
+                        }} />
+                      </label>
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 8, position: 'relative' }}>
+                      <img src={comprobantePreview} alt="Comprobante" style={{ width: '100%', borderRadius: 12, maxHeight: 200, objectFit: 'cover' }} />
+                      <button onClick={() => { setComprobanteFile(null); setComprobantePreview(null) }}
+                        style={{ position: 'absolute', top: 8, right: 8, background: 'rgba(0,0,0,0.55)', border: 'none', color: 'white', borderRadius: '50%', width: 28, height: 28, cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        ✕
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </>
