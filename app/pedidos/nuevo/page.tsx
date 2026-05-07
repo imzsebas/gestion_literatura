@@ -105,7 +105,7 @@ export default function NuevoPedidoPage() {
           .select('id')
           .ilike('title', item.bookTitle)
           .limit(1)
-          .single()
+          .maybeSingle()
 
         if (existingBook) {
           bookId = existingBook.id
