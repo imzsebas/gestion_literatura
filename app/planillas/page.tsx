@@ -546,6 +546,169 @@ export default function PlanillasPage() {
     XLSXStyle.writeFile(wb, `Planilla_Literatura_${diaSeleccionado}.xlsx`)
   }
 
+  const descargarPDF = async () => {
+    if (!planillaData || !diaSeleccionado) return
+
+    const { default: jsPDF } = await import('jspdf')
+    const { default: autoTable } = await import('jspdf-autotable')
+
+    const { filas, vendedoresStr, fechaFormateada, totales } = planillaData
+
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
+
+    // Paleta idéntica a Excel/UI
+    const azulOscuro  : [number,number,number] = [26,  58, 107]
+    const azulMedio   : [number,number,number] = [46,  94, 170]
+    const azulClaro   : [number,number,number] = [214, 228, 247]
+    const azulHeader  : [number,number,number] = [58, 107, 200]
+    const blanco      : [number,number,number] = [255, 255, 255]
+    const grisTexto   : [number,number,number] = [74,  85, 104]
+    const grisFila    : [number,number,number] = [244, 247, 251]
+
+    type BadgeColor = { bg: [number,number,number]; fg: [number,number,number] }
+    const badgeColorMap: Record<string, BadgeColor> = {
+      'Contado':       { bg: [214,245,230], fg: [26,122,74]  },
+      'Crédito':       { bg: [255,232,232], fg: [185,28,28]  },
+      'Credi-Contado': { bg: [255,248,220], fg: [146,64,14]  },
+      'Ofrendado':     { bg: [255,240,224], fg: [194,65,12]  },
+      'Abono':         { bg: [214,228,247], fg: [26,58,107]  },
+    }
+    const badgeColor = (tipo: string): BadgeColor =>
+      badgeColorMap[tipo] ?? { bg: [243,244,246] as [number,number,number], fg: [55,65,81] as [number,number,number] }
+
+    const pageW = doc.internal.pageSize.getWidth()
+    let y = 10
+
+    // ── Título principal ──────────────────────────────────────────────────────
+    doc.setFillColor(...azulOscuro)
+    doc.rect(10, y, pageW - 20, 10, 'F')
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(13)
+    doc.setTextColor(...blanco)
+    doc.text('IGLESIA EN MONTERÍA — SERVICIO DE LITERATURA', pageW / 2, y + 6.8, { align: 'center' })
+    y += 10
+
+    // ── Subtítulo ─────────────────────────────────────────────────────────────
+    doc.setFillColor(...azulMedio)
+    doc.rect(10, y, pageW - 20, 8, 'F')
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(...blanco)
+    doc.text('FORMATO DE DISTRIBUCIÓN Y CONTROL DE VENTAS', pageW / 2, y + 5.5, { align: 'center' })
+    y += 8
+
+    // ── Fecha y vendedor ──────────────────────────────────────────────────────
+    doc.setFillColor(...azulClaro)
+    doc.rect(10, y, pageW - 20, 8, 'F')
+    doc.setFontSize(9)
+    doc.setTextColor(...azulOscuro)
+    doc.setFont('helvetica', 'bold')
+    doc.text(`FECHA: ${fechaFormateada}`, 14, y + 5.5)
+    doc.text(`VENDEDOR(A): ${vendedoresStr}`, pageW - 14, y + 5.5, { align: 'right' })
+    y += 10
+
+    // ── Tabla ─────────────────────────────────────────────────────────────────
+    const fmtNum = (v: number) => v.toLocaleString('es-CO')
+
+    autoTable(doc, {
+      startY: y,
+      margin: { left: 10, right: 10 },
+      head: [['NOMBRES', 'LIBRO', 'MOVIMIENTO', 'CANT.', 'VALOR', 'ABONÓ', 'PAGÓ']],
+      body: filas.map(f => [
+        f.nombre,
+        f.libro,
+        String(f.movimiento),
+        f.cantidad !== '' ? String(f.cantidad) : '—',
+        typeof f.valor === 'number' ? fmtNum(f.valor) : '—',
+        typeof f.abono === 'number' ? fmtNum(f.abono) : '—',
+        typeof f.pago  === 'number' ? fmtNum(f.pago)  : '—',
+      ]),
+      foot: [['TOTALES', '', '', String(totales.cant), fmtNum(totales.valor), fmtNum(totales.abono), fmtNum(totales.pago)]],
+
+      headStyles: {
+        fillColor: azulHeader,
+        textColor: blanco,
+        fontStyle: 'bold',
+        fontSize: 9,
+        halign: 'center',
+        valign: 'middle',
+        cellPadding: 3,
+      },
+      footStyles: {
+        fillColor: azulOscuro,
+        textColor: blanco,
+        fontStyle: 'bold',
+        fontSize: 9,
+        halign: 'right',
+        cellPadding: 3,
+      },
+      bodyStyles: {
+        fontSize: 9,
+        textColor: grisTexto,
+        cellPadding: 2.5,
+        valign: 'middle',
+      },
+      alternateRowStyles: { fillColor: grisFila },
+
+      tableWidth: 'wrap',
+      columnStyles: {
+        0: { cellWidth: 52, fontStyle: 'bold', textColor: [26,32,44] },
+        1: { cellWidth: 65 },
+        2: { cellWidth: 35, halign: 'center' },
+        3: { cellWidth: 18, halign: 'right' },
+        4: { cellWidth: 35, halign: 'right' },
+        5: { cellWidth: 36, halign: 'right', textColor: azulMedio, fontStyle: 'bold' },
+        6: { cellWidth: 36, halign: 'right', textColor: [26,122,74], fontStyle: 'bold' },
+      },
+
+      // Colorear la columna MOVIMIENTO con los colores de badge
+      didDrawCell: (data: any) => {
+        if (data.section === 'body' && data.column.index === 2) {
+          const tipo = String(filas[data.row.index]?.movimiento ?? '')
+          const { bg, fg } = badgeColor(tipo)
+          const { x, y: cy, width, height } = data.cell
+          const pad = 2
+          doc.setFillColor(...bg)
+          doc.roundedRect(x + pad, cy + pad, width - pad * 2, height - pad * 2, 2, 2, 'F')
+          doc.setTextColor(...fg)
+          doc.setFont('helvetica', 'bold')
+          doc.setFontSize(8)
+          doc.text(tipo, x + width / 2, cy + height / 2 + 0.5, { align: 'center', baseline: 'middle' })
+        }
+      },
+
+      showFoot: 'lastPage',
+    })
+
+    // ── Resumen visual debajo de la tabla ─────────────────────────────────────
+    const finalY = (doc as any).lastAutoTable.finalY + 6
+    const cols = [
+      { label: 'Libros',          val: String(totales.cant),        color: azulOscuro },
+      { label: 'Valor total',     val: fmtNum(totales.valor),       color: grisTexto  },
+      { label: 'Total abonado',   val: fmtNum(totales.abono),       color: azulMedio  },
+      { label: 'Total pagado',    val: fmtNum(totales.pago),        color: [26,122,74] as [number,number,number] },
+    ]
+    const boxW = (pageW - 20) / 4
+    cols.forEach((col, i) => {
+      const bx = 10 + i * boxW
+      doc.setFillColor(...azulMedio)
+      doc.rect(bx, finalY, boxW - 2, 7, 'F')
+      doc.setTextColor(...blanco)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(8)
+      doc.text(col.label, bx + boxW / 2 - 1, finalY + 4.8, { align: 'center' })
+
+      doc.setFillColor(...blanco)
+      doc.rect(bx, finalY + 7, boxW - 2, 9, 'F')
+      doc.setTextColor(...col.color)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(10)
+      doc.text(col.val, bx + boxW / 2 - 1, finalY + 13, { align: 'center' })
+    })
+
+    doc.save(`Planilla_Literatura_${diaSeleccionado}.pdf`)
+  }
+
   const año = mesActual.getFullYear()
   const mes = mesActual.getMonth()
   const primerDia = new Date(año, mes, 1).getDay()
@@ -614,8 +777,10 @@ export default function PlanillasPage() {
         .planilla-table tfoot td.num { text-align: right; }
         .ver-btn { width: 100%; background: #4D7BFE; color: white; border: none; border-radius: 14px; padding: 14px; font-size: 15px; font-weight: 700; cursor: pointer; font-family: 'DM Sans', sans-serif; margin-top: 14px; box-shadow: 0 6px 20px rgba(77,123,254,0.3); transition: opacity 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
         .ver-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .excel-btn { width: 100%; background: #fff; color: #1A3A6B; border: 2px solid #1A3A6B; border-radius: 14px; padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: 'DM Sans', sans-serif; margin-top: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; transition: background 0.15s; }
+        .excel-btn { flex: 1; background: #fff; color: #1A3A6B; border: 2px solid #1A3A6B; border-radius: 14px; padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: 'DM Sans', sans-serif; display: flex; align-items: center; justify-content: center; gap: 8px; transition: background 0.15s; }
         .excel-btn:hover { background: #EEF2FA; }
+        .pdf-btn { flex: 1; background: #fff; color: #B91C1C; border: 2px solid #B91C1C; border-radius: 14px; padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: 'DM Sans', sans-serif; display: flex; align-items: center; justify-content: center; gap: 8px; transition: background 0.15s; }
+        .pdf-btn:hover { background: #FFF5F5; }
         .planilla-section { background: white; border-radius: 20px; margin: 0 20px 16px; box-shadow: 0 4px 16px rgba(0,0,0,0.06); overflow: hidden; }
         .planilla-header { background: #1A3A6B; color: white; padding: 16px 20px; }
         .planilla-header h2 { font-size: 15px; font-weight: 700; }
@@ -793,10 +958,13 @@ export default function PlanillasPage() {
             </div>
           </div>
 
-          {/* Botón descargar Excel (secundario) */}
-          <div style={{ padding: '0 16px 16px' }}>
+          {/* Botones descargar */}
+          <div style={{ padding: '0 16px 16px', display: 'flex', gap: 10, marginTop: 10 }}>
             <button className="excel-btn" onClick={descargarExcel}>
-              📥 Descargar como Excel
+              📥 Excel
+            </button>
+            <button className="pdf-btn" onClick={descargarPDF}>
+              📄 PDF
             </button>
           </div>
         </div>
