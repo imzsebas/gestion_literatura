@@ -176,10 +176,10 @@ export default function DashboardPage() {
 
     // Pedidos recientes (para mostrar gasto en libros y envío como registros separados)
     const { data: pedidos } = await supabase
-      .from('purchases')
-      .select('id, provider, shipping_cost, arrival_date, created_at')
-      .order('created_at', { ascending: false })
-      .limit(5)
+  .from('purchases')
+  .select('id, provider, shipping_cost, arrival_date, created_at')
+  .order('created_at', { ascending: false })
+  .limit(5)
 
     // Costo total de libros por pedido
     const pedidoIds = (pedidos ?? []).map(p => p.id)
@@ -221,7 +221,7 @@ export default function DashboardPage() {
           id: `ped-libros-${p.id}`,
           descripcion: `Pedido libros — ${p.provider}`,
           monto: -costoLibros,
-          fecha: p.arrival_date ?? p.created_at,
+          fecha: p.arrival_date || p.created_at,
           icono: '📦',
         })
       }
@@ -230,7 +230,7 @@ export default function DashboardPage() {
           id: `ped-envio-${p.id}`,
           descripcion: `Envío pedido — ${p.provider}`,
           monto: -Number(p.shipping_cost),
-          fecha: p.arrival_date ?? p.created_at,
+          fecha: p.arrival_date || p.created_at,
           icono: '🚚',
         })
       }
