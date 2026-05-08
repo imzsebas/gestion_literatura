@@ -38,12 +38,16 @@ export default function DeudoresPage() {
   const [savingAbono, setSavingAbono] = useState(false)
   const [errorAbono, setErrorAbono] = useState('')
 
+  // Estado para recordatorio editable
+  const [modoRecordatorio, setModoRecordatorio] = useState(false)
+  const [mensajeEditable, setMensajeEditable] = useState('')
+  const [deudaRecordatorio, setDeudaRecordatorio] = useState<Deuda | null>(null)
+
   useEffect(() => { fetchDeudores() }, [])
 
   const fetchDeudores = async () => {
     setLoading(true)
 
-    // 1. Traer todas las deudas activas
     const { data: debts } = await supabase
       .from('debts')
       .select('id, sale_id, member_id, original_amount, pending_amount, status, created_at')
@@ -52,14 +56,12 @@ export default function DeudoresPage() {
 
     if (!debts || debts.length === 0) { setDeudores([]); setLoading(false); return }
 
-    // 2. Traer miembros únicos
     const memberIds = [...new Set(debts.map(d => d.member_id))]
     const { data: members } = await supabase
       .from('members')
       .select('id, name, cedula, phone')
       .in('id', memberIds)
 
-    // 3. Traer libros de cada venta
     const saleIds = [...new Set(debts.map(d => d.sale_id))]
     const { data: saleItems } = await supabase
       .from('sale_items')
@@ -79,7 +81,6 @@ export default function DeudoresPage() {
       librosPorVenta[item.sale_id].push(booksMap[item.book_id] ?? 'Libro')
     }
 
-    // 4. Agrupar deudas por miembro
     const membersMap = Object.fromEntries((members ?? []).map(m => [m.id, m]))
     const porMiembro: Record<string, Deudor> = {}
 
@@ -111,19 +112,58 @@ export default function DeudoresPage() {
     (d.phone || '').includes(busqueda)
   )
 
-  const enviarRecordatorio = (deudor: Deudor, deuda: Deuda) => {
+  // Prepara el mensaje y abre el panel editor
+  const prepararRecordatorio = (deudor: Deudor, deuda: Deuda) => {
     const primerNombre = deudor.name.split(' ')[0]
     const libros = deuda.libros.join(', ')
-    const fecha = new Date(deuda.createdAt).toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })
-    const saldo = deuda.pendingAmount.toLocaleString('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 })
+    const fecha = new Date(deuda.createdAt).toLocaleDateString('es-CO', {
+      day: 'numeric', month: 'long', year: 'numeric'
+    })
+    const saldo = deuda.pendingAmount.toLocaleString('es-CO', {
+      style: 'currency', currency: 'COP', minimumFractionDigits: 0
+    })
 
-    const mensaje =
-      `Hola ${primerNombre}, esperamos que estés muy bien. 😊\n\n` +
-      `Te hablamos del *Servicio de Literatura* de la iglesia en montería 📚, para recordarte que tienes un saldo pendiente de *${saldo}* correspondiente a: *${libros}*, generado el ${fecha}.\n\n` +
-      `Te agradecemos comunicarte con nosotros para coordinar el pago de tu saldo. ¡Que Dios te bendiga! ✨`
+    const mensaje = [
+      `Hola hermano(a) ${primerNombre}! Espero que tú y tu familia estén muy bien. 🙏`,
+      '',
+      `Te escribo del *Servicio de Literatura* de la iglesia en Montería, para recordarte con cariño que tienes un saldo pendiente de *${saldo}* por:`,
+      `*${libros}*, entregado el ${fecha}.`,
+      '',
+      `Sabemos que a veces se nos pasan las fechas. *¿Nos ayudas coordinando tu pago esta semana?*`,
+      '',
+      '*Medios de pago:*',
+      '*1. Nequi:* 314 301 1834 a nombre de Daniela Humanes',
+      '*2. Bancolombia Cuenta Ahorros:* 912-545035-63 a nombre de Orfilia Blanquicett',
+      '*3. Efectivo:* El domingo en la reunión de la mesa.',
+      '',
+      `Por favor, nos envías el comprobante si pagas por Nequi o transferencia.`,
+      '',
+      'Si ya realizaste el pago o tienes alguna novedad, escríbenos.',
+      '',
+      'La Gracia, el Favor y la Misericordia de Dios esté contigo.'
+    ].join('\n')
 
-    const url = `https://wa.me/57${deudor.phone}?text=${encodeURIComponent(mensaje)}`
+    setMensajeEditable(mensaje)
+    setDeudaRecordatorio(deuda)
+    setModoRecordatorio(true)
+  }
+
+  // Envía el mensaje (ya editado) a WhatsApp
+  const enviarRecordatorio = () => {
+    if (!selected) return
+    const telefonoLimpio = selected.phone.replace(/\D/g, '')
+    const params = new URLSearchParams({ phone: `57${telefonoLimpio}`, text: mensajeEditable })
+    const url = `https://api.whatsapp.com/send?${params.toString()}`
     window.open(url, '_blank')
+    setModoRecordatorio(false)
+    setMensajeEditable('')
+    setDeudaRecordatorio(null)
+  }
+
+  const cerrarRecordatorio = () => {
+    setModoRecordatorio(false)
+    setMensajeEditable('')
+    setDeudaRecordatorio(null)
   }
 
   const handleAbono = async () => {
@@ -131,12 +171,14 @@ export default function DeudoresPage() {
     setErrorAbono('')
 
     if (montoAbono <= 0) { setErrorAbono('El monto debe ser mayor a 0'); return }
-    if (montoAbono > deudaSeleccionada.pendingAmount) { setErrorAbono(`El abono no puede superar el saldo de ${deudaSeleccionada.pendingAmount.toLocaleString('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 })}`); return }
+    if (montoAbono > deudaSeleccionada.pendingAmount) {
+      setErrorAbono(`El abono no puede superar el saldo de ${deudaSeleccionada.pendingAmount.toLocaleString('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 })}`)
+      return
+    }
 
     setSavingAbono(true)
     const user = JSON.parse(sessionStorage.getItem('user') || '{}')
 
-    // Subir foto del comprobante si existe
     let receiptUrl: string | null = null
     if (comprobanteFile && metodoPago === 'transferencia') {
       const ext = comprobanteFile.name.split('.').pop() ?? 'jpg'
@@ -153,13 +195,11 @@ export default function DeudoresPage() {
     const nuevoSaldo = deudaSeleccionada.pendingAmount - montoAbono
     const nuevoStatus = nuevoSaldo <= 0 ? 'paid' : 'partial'
 
-    // 1. Actualizar deuda
     await supabase.from('debts').update({
       pending_amount: nuevoSaldo,
       status: nuevoStatus,
     }).eq('id', deudaSeleccionada.id)
 
-    // 2. Registrar abono en debt_payments
     await supabase.from('debt_payments').insert({
       debt_id: deudaSeleccionada.id,
       amount: montoAbono,
@@ -168,7 +208,6 @@ export default function DeudoresPage() {
       created_by: user.id ?? null,
     })
 
-    // 3. Registrar movimiento de caja
     await supabase.from('cash_movements').insert({
       type: 'income',
       concept: 'advance',
@@ -196,7 +235,7 @@ export default function DeudoresPage() {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        input { font-family: 'DM Sans', sans-serif; color: #1A202C; }
+        input, textarea { font-family: 'DM Sans', sans-serif; color: #1A202C; }
         .top-bar { background: #4D7BFE; color: white; padding: 44px 24px 24px; border-radius: 0 0 28px 28px; }
         .back-btn { background: rgba(255,255,255,0.2); border: none; color: white; width: 36px; height: 36px; border-radius: 10px; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
         .search-bar { background: rgba(255,255,255,0.15); border: none; border-radius: 14px; padding: 12px 16px; color: white; width: 100%; font-size: 15px; margin-top: 14px; outline: none; font-family: 'DM Sans', sans-serif; }
@@ -222,6 +261,8 @@ export default function DeudoresPage() {
         .error-msg { font-size: 12px; color: #E53E3E; margin-top: 6px; }
         .progress-bar-bg { height: 6px; background: #EEF2FA; border-radius: 3px; margin-top: 8px; }
         .progress-bar-fill { height: 100%; border-radius: 3px; background: #E53E3E; transition: width 0.4s; }
+        .textarea-msg { width: 100%; border: 1.5px solid #E2E8F0; border-radius: 12px; padding: 12px 14px; font-size: 13px; color: #1A202C; outline: none; transition: border-color 0.2s; background: white; resize: vertical; line-height: 1.6; font-family: 'DM Sans', sans-serif; }
+        .textarea-msg:focus { border-color: #25D366; }
       `}</style>
 
       {/* Header */}
@@ -290,10 +331,9 @@ export default function DeudoresPage() {
       ))}
 
       {/* Perfil del deudor */}
-      {selected && !deudaSeleccionada && (
+      {selected && !deudaSeleccionada && !modoRecordatorio && (
         <div className="overlay" onClick={() => setSelected(null)}>
           <div className="sheet" onClick={e => e.stopPropagation()}>
-            {/* Cabecera */}
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
               <div>
                 <p style={{ fontSize: 20, fontWeight: 700, color: '#1A202C' }}>{selected.name}</p>
@@ -336,14 +376,14 @@ export default function DeudoresPage() {
                       </p>
                     </div>
                   </div>
-                  {/* Barra de progreso de pago */}
+                  {/* Barra de progreso */}
                   <div className="progress-bar-bg">
                     <div className="progress-bar-fill" style={{ width: `${pct}%`, background: deuda.status === 'partial' ? '#F6AD55' : '#E53E3E' }} />
                   </div>
                   <p style={{ fontSize: 11, color: '#A0AEC0', marginTop: 4 }}>{Math.round(pct)}% pagado</p>
 
                   <button
-                    onClick={() => { setDeudaSeleccionada(deuda) }}
+                    onClick={() => setDeudaSeleccionada(deuda)}
                     style={{ marginTop: 10, width: '100%', background: '#4D7BFE', color: 'white', border: 'none', borderRadius: 10, padding: '10px', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'DM Sans, sans-serif' }}
                   >
                     💰 Registrar Abono
@@ -351,7 +391,7 @@ export default function DeudoresPage() {
 
                   {selected.phone && (
                     <button
-                      onClick={() => enviarRecordatorio(selected, deuda)}
+                      onClick={() => prepararRecordatorio(selected, deuda)}
                       style={{ marginTop: 8, width: '100%', background: '#F0FFF4', color: '#276749', border: 'none', borderRadius: 10, padding: '10px', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'DM Sans, sans-serif' }}
                     >
                       💬 Enviar Recordatorio
@@ -360,6 +400,66 @@ export default function DeudoresPage() {
                 </div>
               )
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Panel editor de recordatorio */}
+      {selected && modoRecordatorio && (
+        <div className="overlay" onClick={cerrarRecordatorio}>
+          <div className="sheet" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div>
+                <p style={{ fontSize: 16, fontWeight: 700, color: '#1A202C' }}>Recordatorio WhatsApp</p>
+                <p style={{ fontSize: 13, color: '#718096', marginTop: 2 }}>{selected.name}</p>
+              </div>
+              <button
+                onClick={cerrarRecordatorio}
+                style={{ background: '#EEF2FA', border: 'none', borderRadius: 10, width: 34, height: 34, cursor: 'pointer', color: '#718096' }}
+              >✕</button>
+            </div>
+
+            {/* Info número */}
+            <div style={{ background: '#F0FFF4', borderRadius: 12, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 16 }}>📞</span>
+              <p style={{ fontSize: 13, color: '#276749', fontWeight: 600 }}>+57 {selected.phone}</p>
+            </div>
+
+            {/* Textarea editable */}
+            <p className="label">Edita el mensaje antes de enviar</p>
+            <textarea
+              className="textarea-msg"
+              rows={10}
+              value={mensajeEditable}
+              onChange={e => setMensajeEditable(e.target.value)}
+            />
+
+            {/* Botón restaurar */}
+            <button
+              onClick={() => deudaRecordatorio && prepararRecordatorio(selected, deudaRecordatorio)}
+              style={{
+                marginTop: 10, width: '100%', background: '#EEF2FA', color: '#4A5568',
+                border: 'none', borderRadius: 10, padding: '10px', fontSize: 13,
+                fontWeight: 600, cursor: 'pointer', fontFamily: 'DM Sans, sans-serif'
+              }}
+            >
+              🔄 Restaurar mensaje original
+            </button>
+
+            {/* Botón enviar */}
+            <button
+              onClick={enviarRecordatorio}
+              disabled={!mensajeEditable.trim()}
+              style={{
+                marginTop: 8, width: '100%', background: '#25D366', color: 'white',
+                border: 'none', borderRadius: 14, padding: 16, fontSize: 16,
+                fontWeight: 700, cursor: 'pointer', fontFamily: 'DM Sans, sans-serif',
+                opacity: !mensajeEditable.trim() ? 0.5 : 1
+              }}
+            >
+              💬 Enviar por WhatsApp
+            </button>
           </div>
         </div>
       )}
